@@ -1188,20 +1188,51 @@ static inline void port__update_events_if_polling(port_state_t* port_state) {
     port__update_events(port_state);
 }
 
+#ifdef NULL_OVERLAPPED_WAKEUPS_PATCH
+const int RECEIVED_WAKEUP_EVENT = 0xFFFFFFFF;
+#endif
+
+/*
+ * port__feed_events has been modified based on:
+ * - https://github.com/piscisaureus/wepoll/pull/20
+ * - https://github.com/piscisaureus/wepoll/pull/20#issuecomment-677646507
+ *
+ * In the polling crate, in order to implement notify(), we call PostQueuedCompletionStatus passing a null
+ * lpOverlapped parameter. This will result in our event, received via GetQueuedCompletionStatusEx, also
+ * having a null lpOverlapped parameter. If this occurs, we should bail with indication that the caller should
+ * not continue to wait for further events.
+ */
 static inline int port__feed_events(port_state_t* port_state,
                                     struct epoll_event* epoll_events,
                                     OVERLAPPED_ENTRY* iocp_events,
                                     DWORD iocp_event_count) {
   int epoll_event_count = 0;
   DWORD i;
+#ifdef NULL_OVERLAPPED_WAKEUPS_PATCH
+  bool received_wakeup_event = false;
+#endif /* NULL_OVERLAPPED_WAKEUPS_PATCH */
 
   for (i = 0; i < iocp_event_count; i++) {
     IO_STATUS_BLOCK* io_status_block =
         (IO_STATUS_BLOCK*) iocp_events[i].lpOverlapped;
     struct epoll_event* ev = &epoll_events[epoll_event_count];
 
+#ifdef NULL_OVERLAPPED_WAKEUPS_PATCH
+    if (!io_status_block) {
+      received_wakeup_event = true;
+      continue;
+    }
+#endif /* NULL_OVERLAPPED_WAKEUPS_PATCH */
+
     epoll_event_count += sock_feed_event(port_state, io_status_block, ev);
   }
+
+#ifdef NULL_OVERLAPPED_WAKEUPS_PATCH
+  if (epoll_event_count == 0 && received_wakeup_event)
+  {
+    return RECEIVED_WAKEUP_EVENT;
+  }
+#endif /* NULL_OVERLAPPED_WAKEUPS_PATCH */
 
   return epoll_event_count;
 }
@@ -1282,6 +1313,15 @@ int port_wait(port_state_t* port_state,
 
     result = port__poll(
         port_state, events, iocp_events, (DWORD) maxevents, gqcs_timeout);
+
+#ifdef NULL_OVERLAPPED_WAKEUPS_PATCH
+    /* A "wakeup" event triggered by a null lpOverlapped param */
+    if (result == RECEIVED_WAKEUP_EVENT) {
+      result = 0;
+      break;
+    }
+#endif /* NULL_OVERLAPPED_WAKEUPS_PATCH */
+
     if (result < 0 || result > 0)
       break; /* Result, error, or time-out. */
 
