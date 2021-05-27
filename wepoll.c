@@ -1189,7 +1189,7 @@ static inline void port__update_events_if_polling(port_state_t* port_state) {
 }
 
 #ifdef NULL_OVERLAPPED_WAKEUPS_PATCH
-const int RECEIVED_WAKEUP_EVENT = 0xFFFFFFFF;
+const int RECEIVED_WAKEUP_EVENT = 0xFEFEFEFE;
 #endif
 
 /*
